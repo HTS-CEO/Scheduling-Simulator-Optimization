@@ -1,0 +1,385 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Ultra Scheduling Simulator</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; font-family: 'Segoe UI', Arial, sans-serif; }
+        body { display: flex; flex-direction: column; height: 100vh; background: #f8f9fa; }
+        header { background: #2c3e50; color: white; padding: 15px 20px; display: flex; justify-content: space-between; align-items: center; }
+        #main-container { display: flex; flex: 1; overflow: hidden; }
+        #sidebar { width: 250px; background: #34495e; color: white; padding: 15px; overflow-y: auto; transition: width 0.3s; }
+        #content { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
+        #toolbar { background: #ecf0f1; padding: 10px; display: flex; flex-wrap: wrap; gap: 10px; border-bottom: 1px solid #ddd; }
+        #timeline-container { flex: 1; position: relative; overflow: hidden; }
+        #canvas { display: block; width: 100%; height: 100%; }
+        #time-ruler { height: 40px; background: #f1f1f1; border-bottom: 1px solid #ddd; position: relative; overflow: hidden; }
+        #controls { background: #ecf0f1; padding: 15px; display: flex; justify-content: center; gap: 15px; flex-wrap: wrap; }
+        .btn { padding: 8px 15px; background: #3498db; color: white; border: none; border-radius: 4px; cursor: pointer; transition: background 0.2s; }
+        .btn:hover { background: #2980b9; }
+        .btn-secondary { background: #95a5a6; }
+        .btn-secondary:hover { background: #7f8c8d; }
+        .form-group { margin-bottom: 10px; }
+        label { display: block; margin-bottom: 5px; font-weight: bold; color: #333; }
+        input[type="text"], input[type="range"], select { width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 4px; }
+        .slider-container { display: flex; align-items: center; gap: 10px; }
+        #event-tooltip { position: absolute; background: rgba(0,0,0,0.8); color: white; padding: 8px 12px; border-radius: 4px; pointer-events: none; z-index: 100; display: none; max-width: 300px; }
+        #mobile-menu-btn { display: none; background: none; border: none; color: white; font-size: 20px; cursor: pointer; }
+        .tick { position: absolute; height: 100%; width: 1px; background: #999; }
+        .tick-label { position: absolute; top: 5px; left: 5px; font-size: 12px; }
+        @media (max-width: 768px) {
+            #main-container { flex-direction: column; }
+            #sidebar { width: 100%; height: auto; max-height: 200px; }
+            #mobile-menu-btn { display: block; }
+            #toolbar { flex-direction: column; }
+            #controls { flex-direction: column; align-items: center; }
+            .btn { width: 100%; }
+        }
+    </style>
+</head>
+<body>
+    <header>
+        <h1>Scheduling Simulator</h1>
+        <button id="mobile-menu-btn">☰</button>
+    </header>
+    <div id="main-container">
+        <div id="sidebar">
+            <div class="form-group">
+                <label for="filter-input">Search Events</label>
+                <input type="text" id="filter-input" placeholder="Type to filter...">
+            </div>
+            <div class="form-group">
+                <label for="event-type">Event Type</label>
+                <select id="event-type">
+                    <option value="all">All Types</option>
+                    <option value="0">Type 1</option>
+                    <option value="1">Type 2</option>
+                    <option value="2">Type 3</option>
+                    <option value="3">Type 4</option>
+                    <option value="4">Type 5</option>
+                </select>
+            </div>
+            <div class="form-group">
+                <label for="date-range">Date Range</label>
+                <input type="text" id="date-range" placeholder="Select date range">
+            </div>
+            <button id="reset-filters" class="btn btn-secondary">Reset Filters</button>
+        </div>
+        <div id="content">
+            <div id="toolbar">
+                <button id="zoom-in" class="btn">Zoom In</button>
+                <button id="zoom-out" class="btn">Zoom Out</button>
+                <button id="fit-all" class="btn">Fit All</button>
+                <div class="slider-container">
+                    <span>Zoom:</span>
+                    <input type="range" id="zoom-slider" min="1" max="100" value="50">
+                </div>
+            </div>
+            <div id="time-ruler"></div>
+            <div id="timeline-container">
+                <canvas id="canvas"></canvas>
+                <div id="event-tooltip"></div>
+            </div>
+            <div id="controls">
+                <button id="play-pause" class="btn">▶ Play</button>
+                <div class="slider-container">
+                    <span>Speed:</span>
+                    <input type="range" id="speed-slider" min="1" max="10" value="3">
+                </div>
+                <div id="current-time">00:00:00</div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        document.addEventListener('DOMContentLoaded', function() {
+            const canvas = document.getElementById('canvas');
+            const ctx = canvas.getContext('2d');
+            const tooltip = document.getElementById('event-tooltip');
+            const timeRuler = document.getElementById('time-ruler');
+            const currentTimeDisplay = document.getElementById('current-time');
+            const mobileMenuBtn = document.getElementById('mobile-menu-btn');
+            const sidebar = document.getElementById('sidebar');
+            
+            let events = [];
+            let filteredEvents = [];
+            let isPlaying = false;
+            let playbackSpeed = 3;
+            let animationFrameId = null;
+            let lastRenderTime = 0;
+            let isDragging = false;
+            let lastX = 0;
+            
+            const colors = ['#FF6B6B', '#4ECDC4', '#45B7D1', '#FFA07A', '#98D8C8'];
+            
+            function init() {
+                generateMockData(50000);
+                setupEventListeners();
+                resizeCanvas();
+                calculateViewport();
+                renderAll();
+            }
+            
+            function generateMockData(count) {
+                const now = Date.now();
+                const oneYear = 365 * 24 * 60 * 60 * 1000;
+                for (let i = 0; i < count; i++) {
+                    const start = now + Math.random() * oneYear;
+                    const duration = 1000 * 60 * 60 * (1 + Math.random() * 23);
+                    events.push({
+                        id: i,
+                        start: start,
+                        end: start + duration,
+                        name: `Event ${i}`,
+                        type: Math.floor(Math.random() * 5),
+                        color: colors[Math.floor(Math.random() * colors.length)]
+                    });
+                }
+                filteredEvents = [...events];
+            }
+            
+            function resizeCanvas() {
+                canvas.width = canvas.clientWidth;
+                canvas.height = canvas.clientHeight;
+                renderAll();
+            }
+            
+            function setupEventListeners() {
+                window.addEventListener('resize', resizeCanvas);
+                mobileMenuBtn.addEventListener('click', () => sidebar.classList.toggle('active'));
+                document.getElementById('zoom-in').addEventListener('click', () => zoom(0.8));
+                document.getElementById('zoom-out').addEventListener('click', () => zoom(1.25));
+                document.getElementById('fit-all').addEventListener('click', fitAllEvents);
+                document.getElementById('play-pause').addEventListener('click', togglePlayback);
+                document.getElementById('speed-slider').addEventListener('input', function() {
+                    playbackSpeed = parseInt(this.value);
+                });
+                document.getElementById('zoom-slider').addEventListener('input', function() {
+                    const value = parseInt(this.value);
+                    const minScale = 0.0001;
+                    const maxScale = 0.1;
+                    const scale = minScale + (maxScale - minScale) * (value / 100);
+                    const centerTime = (viewport.minTime + viewport.maxTime) / 2;
+                    const newDuration = 1 / scale;
+                    viewport.minTime = centerTime - (newDuration / 2);
+                    viewport.maxTime = centerTime + (newDuration / 2);
+                    viewport.pixelsPerMillisecond = canvas.width / newDuration;
+                    renderAll();
+                });
+                document.getElementById('filter-input').addEventListener('input', function() {
+                    const searchTerm = this.value.toLowerCase();
+                    filteredEvents = events.filter(event => 
+                        event.name.toLowerCase().includes(searchTerm) && 
+                        (document.getElementById('event-type').value === 'all' || 
+                         event.type === parseInt(document.getElementById('event-type').value))
+                    );
+                    renderAll();
+                });
+                document.getElementById('event-type').addEventListener('change', function() {
+                    document.getElementById('filter-input').dispatchEvent(new Event('input'));
+                });
+                document.getElementById('reset-filters').addEventListener('click', function() {
+                    document.getElementById('filter-input').value = '';
+                    document.getElementById('event-type').value = 'all';
+                    filteredEvents = [...events];
+                    renderAll();
+                });
+                canvas.addEventListener('mousedown', handleMouseDown);
+                canvas.addEventListener('mousemove', handleMouseMove);
+                canvas.addEventListener('mouseup', handleMouseUp);
+                canvas.addEventListener('mouseleave', handleMouseUp);
+                canvas.addEventListener('wheel', handleWheel);
+            }
+            
+            let viewport = {
+                minTime: 0,
+                maxTime: 0,
+                pixelsPerMillisecond: 0
+            };
+            
+            function calculateViewport() {
+                if (filteredEvents.length === 0) return;
+                const minStart = Math.min(...filteredEvents.map(e => e.start));
+                const maxEnd = Math.max(...filteredEvents.map(e => e.end));
+                const totalDuration = maxEnd - minStart;
+                viewport = {
+                    minTime: minStart - totalDuration * 0.1,
+                    maxTime: maxEnd + totalDuration * 0.1,
+                    pixelsPerMillisecond: canvas.width / (totalDuration * 1.2)
+                };
+            }
+            
+            function fitAllEvents() {
+                calculateViewport();
+                document.getElementById('zoom-slider').value = 50;
+                renderAll();
+            }
+            
+            function zoom(factor, centerX) {
+                const centerTime = centerX ? 
+                    viewport.minTime + (centerX / canvas.width) * (viewport.maxTime - viewport.minTime) : 
+                    (viewport.minTime + viewport.maxTime) / 2;
+                const newDuration = (viewport.maxTime - viewport.minTime) * factor;
+                viewport.minTime = centerTime - (newDuration / 2);
+                viewport.maxTime = centerTime + (newDuration / 2);
+                viewport.pixelsPerMillisecond = canvas.width / newDuration;
+                const sliderValue = Math.max(1, Math.min(100, 100 - (Math.log10(newDuration) + 4) * 25));
+                document.getElementById('zoom-slider').value = sliderValue;
+                renderAll();
+            }
+            
+            function handleMouseDown(e) {
+                isDragging = true;
+                lastX = e.clientX;
+                e.preventDefault();
+            }
+            
+            function handleMouseMove(e) {
+                if (isDragging) {
+                    const dx = e.clientX - lastX;
+                    const dt = dx / viewport.pixelsPerMillisecond;
+                    viewport.minTime -= dt;
+                    viewport.maxTime -= dt;
+                    lastX = e.clientX;
+                    renderAll();
+                }
+                const mouseTime = viewport.minTime + (e.offsetX / canvas.width) * (viewport.maxTime - viewport.minTime);
+                const hoveredEvent = findEventAtPosition(mouseTime, e.offsetY);
+                if (hoveredEvent) {
+                    tooltip.style.display = 'block';
+                    tooltip.style.left = `${e.pageX + 10}px`;
+                    tooltip.style.top = `${e.pageY + 10}px`;
+                    tooltip.innerHTML = `<strong>${hoveredEvent.name}</strong><br>${formatDate(hoveredEvent.start)} - ${formatDate(hoveredEvent.end)}`;
+                } else {
+                    tooltip.style.display = 'none';
+                }
+            }
+            
+            function formatDate(timestamp) {
+                return new Date(timestamp).toLocaleString();
+            }
+            
+            function handleMouseUp() {
+                isDragging = false;
+            }
+            
+            function handleWheel(e) {
+                e.preventDefault();
+                const zoomFactor = e.deltaY < 0 ? 0.8 : 1.25;
+                zoom(zoomFactor, e.offsetX);
+            }
+            
+            function findEventAtPosition(time, y) {
+                const laneHeight = 30;
+                const lane = Math.floor(y / laneHeight);
+                for (const event of filteredEvents) {
+                    if (time >= event.start && time <= event.end) {
+                        const eventLane = event.id % 10;
+                        if (eventLane === lane) {
+                            return event;
+                        }
+                    }
+                }
+                return null;
+            }
+            
+            function togglePlayback() {
+                isPlaying = !isPlaying;
+                document.getElementById('play-pause').textContent = isPlaying ? '❚❚ Pause' : '▶ Play';
+                if (isPlaying) {
+                    lastRenderTime = performance.now();
+                    animationFrameId = requestAnimationFrame(playbackFrame);
+                } else if (animationFrameId) {
+                    cancelAnimationFrame(animationFrameId);
+                }
+            }
+            
+            function playbackFrame(currentTime) {
+                if (!lastRenderTime) lastRenderTime = currentTime;
+                const deltaTime = (currentTime - lastRenderTime) * playbackSpeed;
+                lastRenderTime = currentTime;
+                viewport.minTime += deltaTime;
+                viewport.maxTime += deltaTime;
+                renderAll();
+                updateTimeDisplay();
+                if (isPlaying) {
+                    animationFrameId = requestAnimationFrame(playbackFrame);
+                }
+            }
+            
+            function updateTimeDisplay() {
+                const centerTime = (viewport.minTime + viewport.maxTime) / 2;
+                currentTimeDisplay.textContent = new Date(centerTime).toLocaleTimeString();
+            }
+            
+            function renderAll() {
+                if (filteredEvents.length === 0) {
+                    ctx.clearRect(0, 0, canvas.width, canvas.height);
+                    timeRuler.innerHTML = '';
+                    return;
+                }
+                if (viewport.pixelsPerMillisecond === 0) calculateViewport();
+                ctx.clearRect(0, 0, canvas.width, canvas.height);
+                renderTimeRuler();
+                renderEvents();
+            }
+            
+            function renderTimeRuler() {
+                timeRuler.innerHTML = '';
+                const duration = viewport.maxTime - viewport.minTime;
+                const majorTickInterval = calculateTickInterval(duration);
+                for (let time = viewport.minTime; time <= viewport.maxTime; time += majorTickInterval) {
+                    const x = ((time - viewport.minTime) / duration) * timeRuler.clientWidth;
+                    const tick = document.createElement('div');
+                    tick.className = 'tick';
+                    tick.style.left = `${x}px`;
+                    timeRuler.appendChild(tick);
+                    const label = document.createElement('div');
+                    label.className = 'tick-label';
+                    label.style.left = `${x + 5}px`;
+                    label.textContent = new Date(time).toLocaleTimeString();
+                    timeRuler.appendChild(label);
+                }
+            }
+            
+            function calculateTickInterval(durationMs) {
+                const durationSeconds = durationMs / 1000;
+                if (durationSeconds > 24 * 60 * 60) return 24 * 60 * 60 * 1000;
+                if (durationSeconds > 6 * 60 * 60) return 6 * 60 * 60 * 1000;
+                if (durationSeconds > 60 * 60) return 60 * 60 * 1000;
+                if (durationSeconds > 30 * 60) return 30 * 60 * 1000;
+                if (durationSeconds > 10 * 60) return 10 * 60 * 1000;
+                if (durationSeconds > 60) return 60 * 1000;
+                return 10 * 1000;
+            }
+            
+            function renderEvents() {
+                const laneHeight = 30;
+                const visibleEvents = getVisibleEvents();
+                visibleEvents.forEach(event => {
+                    const x1 = ((event.start - viewport.minTime) / (viewport.maxTime - viewport.minTime)) * canvas.width;
+                    const x2 = ((event.end - viewport.minTime) / (viewport.maxTime - viewport.minTime)) * canvas.width;
+                    const lane = event.id % 10;
+                    const y = lane * laneHeight;
+                    ctx.fillStyle = event.color;
+                    ctx.fillRect(x1, y, x2 - x1, laneHeight - 2);
+                    if (x2 - x1 > 30) {
+                        ctx.fillStyle = 'white';
+                        ctx.font = '12px Arial';
+                        ctx.fillText(event.name, x1 + 5, y + 18);
+                    }
+                });
+            }
+            
+            function getVisibleEvents() {
+                return filteredEvents.filter(event => 
+                    event.end >= viewport.minTime && 
+                    event.start <= viewport.maxTime
+                );
+            }
+            
+            init();
+        });
+    </script>
+</body>
+</html>
